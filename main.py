@@ -69,37 +69,63 @@ def layers(vgg_layer3_out, vgg_layer4_out, vgg_layer7_out, num_classes):
     def custom_init(shape, dtype=tf.float32, partition_info=None, seed=0):
         return tf.random_normal(shape, dtype=dtype, seed=seed)
 
-    print("vgg_layer_7_out ", vgg_layer7_out.get_shape())
     print("vgg_layer7_out ", vgg_layer7_out)
 
     # 1x1 convolution
-    dense_out = tf.layers.dense(vgg_layer7_out, num_classes,
-                                kernel_initializer=custom_init,
-                                name='dense_out')
-    conv_1x1 = tf.layers.conv2d(dense_out, num_classes, 1, strides=(1, 1),
-                                kernel_initializer=custom_init,
-                                name='conv_1x1', padding='SAME')
-    conv_1x1 = tf.reshape(conv_1x1, [-1, -1, -1, 512])
+    # dense_out = tf.layers.dense(vgg_layer7_out, num_classes,
+    #                             kernel_initializer=custom_init,
+    #                             name='dense_out')
+    # print("dense_out ", dense_out)
+    # custom init with the seed set to 0 by default
+    def custom_init(shape, dtype=tf.float32, partition_info=None, seed=0):
+        return tf.random_normal(shape, dtype=dtype, seed=seed)
 
-    print("conv_1x1 ", conv_1x1)
+    input = tf.layers.conv2d(vgg_layer7_out, num_classes, 1, strides=(1, 1),
+                             kernel_initializer=custom_init,
+                             name='conv_1x1')
+    #conv_1x1 = tf.reshape(conv_1x1, [-1, -1, -1, 512])
+
+    print("conv_1x1 ", input)
 
     # encoder
-    skip1 = tf.add(conv_1x1, vgg_layer4_out, name='skip1')
-    print(skip1)
-    trans1 = tf.layers.conv2d_transpose(skip1, num_classes, 4, strides=(2, 2),
-                                        name='trans1')
-    trans1 = tf.reshape(trans1, [-1, -1, -1, 256])
-    print(trans1)
 
-    skip2 = tf.add(trans1, vgg_layer3_out, name='skip2')
-    print(skip2)
-    trans2 = tf.layers.conv2d_transpose(skip2, num_classes, 16, strides=(8, 8),
-                                        name='trans2')
-    print(trans2)
 
-    output = tf.layers.conv2d_transpose(trans1, num_classes, 4, strides=(2, 2),
+    input = tf.layers.conv2d_transpose(input, num_classes, 4, strides=(2, 2),
+                                       padding='same',
+                                       name='trans1')
+    print("trans1 ", input)
+
+    shape_layer4 = vgg_layer4_out.get_shape()
+    print("vgg_layer4_out.get_shape() ", shape_layer4)
+    l4_features = shape_layer4[3].value
+    l4_shape = [-1, num_classes, 4, l4_features]
+    print("l4_shape ", l4_shape)
+    input = tf.reshape(input, l4_shape)
+    print ("reshape ", input)
+
+    input = tf.add(input, vgg_layer4_out, name='skip1')
+    print("skip1 ", input)
+
+    input = tf.layers.conv2d_transpose(input, num_classes, 16, strides=(8, 8),
+                                       padding='same',
+                                       name='trans2')
+    print("trans2 ", input)
+
+    shape_layer3 = vgg_layer3_out.get_shape()
+    print("vgg_layer3_out.get_shape() ", shape_layer3)
+    l3_features = shape_layer3[3].value
+    l3_shape = [-1, 16, num_classes, l3_features]
+    print("l3_shape ", l3_shape)
+    input = tf.reshape(input, l3_shape)
+    print ("reshape ", input)
+
+    input = tf.add(input, vgg_layer3_out, name='skip2')
+    print("skip2 ", input)
+
+    output = tf.layers.conv2d_transpose(input, num_classes, 4, strides=(2, 2),
+                                       padding='same',
                                         name='output')
-    print(output)
+    print("output ", output)
     return output
 tests.test_layers(layers)
 
@@ -178,15 +204,15 @@ def train_nn(sess, epochs, batch_size, get_batches_fn, train_op,
         # train model
         step = 0
         for i in range(epochs):
-            for batch_image, batch_label in get_batches_fn(batch_size):
+            for images, gt_images in get_batches_fn(batch_size):
                 step += 1
 
-                if step % 1000 == 0:  # record a summary with trace
+                if step % 100 == 0:  # record a summary with trace
                     run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                     run_metadata = tf.RunMetadata()
                     summary, _ = sess.run([merged,  train_op],
-                                          feed_dict={input_image: batch_image,
-                                                     correct_label: batch_label,
+                                          feed_dict={input_image: images,
+                                                     correct_label: gt_images,
                                                      learning_rate: learn_rate,
                                                      keep_prob: dropout},
                                           options=run_options,
@@ -196,17 +222,17 @@ def train_nn(sess, epochs, batch_size, get_batches_fn, train_op,
                     train_writer.add_summary(summary, step)
                     print('Adding run metadata for ', step)
 
-                elif step % 100 == 0:  # record a summary
+                elif step % 10 == 0:  # record a summary
                     summary, _ = sess.run([merged,  train_op],
-                                          feed_dict={input_image: batch_image,
-                                                     correct_label: batch_label,
+                                          feed_dict={input_image: images,
+                                                     correct_label: gt_images,
                                                      learning_rate: learn_rate,
                                                      keep_prob: dropout})
                     train_writer.add_summary(summary, step)
                 else:
                     _ = sess.run(train_op,
-                                 feed_dict={input_image: batch_image,
-                                            correct_label: batch_label,
+                                 feed_dict={input_image: images,
+                                            correct_label: gt_images,
                                             learning_rate: learn_rate,
                                             keep_prob: dropout})
 
@@ -255,7 +281,7 @@ def run():
                                vgg_layer7_out, num_classes)
         learning_rate = tf.placeholder(tf.float32, name='learning-rate')
         correct_label = tf.placeholder(tf.float32,
-                                       (None, None, None, num_classes),
+                                       (None, image_shape[0], image_shape[1], num_classes),
                                        name='correct-label')
         logits, train_op, cross_entropy_loss = optimize(nn_last_layer,
                                                         correct_label,
@@ -264,7 +290,7 @@ def run():
 
         # TODO: Train NN using the train_nn function
         epochs = 5
-        batch_size = 5
+        batch_size = 10
         train_nn(sess, epochs, batch_size, get_batches_fn, train_op,
                  cross_entropy_loss, input_image,
                  correct_label, keep_prob, learning_rate)
